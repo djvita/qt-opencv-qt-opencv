@@ -1,0 +1,221 @@
+
+#include "opencvwidget.h"
+
+
+#include <sys/time.h>
+#include <time.h>
+
+#include <QDebug>
+#include <QFileInfo>
+
+
+
+
+static unsigned int GetTimeStamp_us(void)
+{
+struct timeval curentTime;
+
+return (curentTime.tv_sec *1000000 + curentTime.tv_usec);
+}
+unsigned int startTime;
+unsigned int stopTime;
+float deltaTime;
+
+OpenCVWidget::OpenCVWidget(QWidget *parent) : QWidget(parent) {
+    mDetectingFaces = false;
+    mTrackingFace = false;
+    mFlipV = false;
+    mFlipH = true;
+    mVideoWriter = 0;
+    mFps = 16;
+    mCvRect = cvRect(-1, -1, 0, 0);
+
+
+
+    // Camera Initialization
+    mCamera = cvCaptureFromCAM(CV_CAP_ANY);
+
+    if(mCamera) {
+
+        // Get a query frame to initialize the capture and to get the frame's dimensions
+        IplImage* frame = cvQueryFrame(mCamera);
+        this->setMinimumSize(frame->width, frame->height);
+
+        // QImage to draw on paint event
+        mImage = QImage(QSize(frame->width, frame->height), QImage::Format_RGB888);
+
+        // We create only an IplImage's header to share the same buffer
+        mCvImage = cvCreateImageHeader(cvSize(frame->width, frame->height), 8, 3);
+
+        // Share the buffer between QImage and IplImage *
+        mCvImage->imageData = (char *)mImage.bits();
+
+        // Init Face Detection and Face Tracking
+        mFaceDetect = new FaceDetect();
+        mCamShift = new CamShift(cvSize(frame->width, frame->height));
+
+        // Try to load a default cascade file
+        QFileInfo cascadeFile("haarcascades/haarcascade_frontalface_alt2.xml");
+        if(cascadeFile.exists()) mFaceDetect->setCascadeFile(cascadeFile.absoluteFilePath());
+
+        // We call queryFrame 'mFps' times per second
+        mTimer = new QTimer(this);
+        connect(mTimer, SIGNAL(timeout()), this, SLOT(queryFrame()));
+        mTimer->start(1000/mFps);
+
+
+    }
+
+
+
+}
+
+OpenCVWidget::~OpenCVWidget() {
+    if(mFaceDetect) delete mFaceDetect;
+    if(mCamShift) delete mCamShift;
+    cvReleaseCapture(&mCamera);
+}
+
+bool OpenCVWidget::isCaptureActive() const {
+    return bool(mCamera);
+}
+
+bool OpenCVWidget::isFaceDetectAvalaible() const {
+    return !mFaceDetect->cascadeFile().isEmpty();
+}
+
+void OpenCVWidget::queryFrame() {
+
+    QTime m_time;
+    m_time.start();
+    IplImage* frame = cvQueryFrame(mCamera);
+    if(!frame) return;
+
+    // We copy the frame to our buffer(fliping it if necessary)
+    if(mFlipV || frame->origin != IPL_ORIGIN_TL) cvFlip(frame, mCvImage, 0);
+        else cvCopy(frame, mCvImage, 0);
+    if(mFlipH) cvFlip(mCvImage, mCvImage, 1);
+
+    if(mVideoWriter) cvWriteFrame(mVideoWriter, frame);
+
+    if(mDetectingFaces) mListRect = mFaceDetect->detectFaces(mCvImage);
+
+    if(mTrackingFace) {
+        // Check if we have a valid rect. If we have a valid one, we track the face,
+        // if not we get a face rect first
+        if(!(mCvRect.width > 0 && mCvRect.height > 0)) {
+            // Detect the Face
+            mFaceDetect->setFlags(CV_HAAR_FIND_BIGGEST_OBJECT);
+            QVector<QRect> listRect = mFaceDetect->detectFaces(mCvImage);
+
+            if(!listRect.isEmpty()) {
+                QRect trackRect = listRect.at(0);
+                mCvRect = cvRect(trackRect.x(), trackRect.y(), trackRect.width(), trackRect.height());
+                mCamShift->startTracking(mCvImage, mCvRect);
+            }
+        } else {
+            // Track the Face
+            mCvBox = mCamShift->trackFace(mCvImage);
+            cvEllipseBox(mCvImage, mCvBox, CV_RGB(255,0,0), 3, CV_AA, 0);
+        }
+    }
+    // Convert it from BGR to RGB. QImage works with RGB and cvQueryFrame returns a BGR IplImage
+    cvCvtColor(mCvImage, mCvImage, CV_BGR2RGB);
+    update();
+    qDebug("%f FPS\n", (float)(1000/(m_time.elapsed())) );
+}
+
+void OpenCVWidget::paintEvent(QPaintEvent *event) {
+    QPainter painter(this);
+
+    if(!mImage.isNull()) painter.drawPixmap(0, 0, QPixmap::fromImage(mImage));
+
+    if(!mListRect.empty()) {
+        QPen pen(palette().dark().color(), 4, Qt::SolidLine, Qt::FlatCap, Qt::BevelJoin);
+        painter.setPen(pen);
+        foreach(QRect rect, mListRect) painter.drawEllipse(rect);
+
+        // Clean the list when we have painted the rects
+        mListRect.clear();
+    }
+}
+
+void OpenCVWidget::saveScreenshot() {
+    QString filename = QString("webcamPic.jpg");
+    int i = 0;
+
+    while(QFileInfo(filename).exists())
+        filename = QString("webcamPic%1.jpg").arg(++i);
+
+    if(!mImage.isNull()) mImage.save(filename, "JPG", 80);
+}
+
+void OpenCVWidget::videoWrite() {
+    int i = 1;
+    QString filename = QString("webcamVid%1.avi").arg(i);
+    while(QFileInfo(filename).exists())
+        filename = QString("webcamVid%1.avi").arg(i++);
+
+    CvSize size = cvGetSize(mCvImage);
+
+    // It seems that my camera don't get more than 8 fps at 640x480
+    mVideoWriter = cvCreateVideoWriter(filename.toUtf8(), CV_FOURCC('D','I','V','X'), 8, size);
+}
+
+void OpenCVWidget::videoStop() {
+    cvReleaseVideoWriter(&mVideoWriter);
+}
+
+void OpenCVWidget::setDetectFaces(bool detect) {
+    mDetectingFaces = detect;
+}
+
+void OpenCVWidget::setTrackFace(bool track) {
+    mTrackingFace = track;
+    if(!mTrackingFace) mCvRect = cvRect(-1, -1, 0, 0);
+}
+
+void OpenCVWidget::setFaceDetectFlags(int flags) {
+    mFaceDetect->setFlags(flags);
+}
+
+void OpenCVWidget::switchFlipH() {
+    mFlipH = !mFlipH;
+}
+
+void OpenCVWidget::switchFlipV() {
+    mFlipV = !mFlipV;
+}
+
+bool OpenCVWidget::flipH() const {
+    return mFlipH;
+}
+
+bool OpenCVWidget::flipV() const {
+    return mFlipV;
+}
+
+void OpenCVWidget::setCascadeFile(QString filename) {
+    mFaceDetect->setCascadeFile(filename);
+}
+
+QString OpenCVWidget::cascadeFile() const {
+    if(mFaceDetect) return mFaceDetect->cascadeFile();
+        else return "";
+}
+
+void OpenCVWidget::setCamShiftVMin(int vMin) {
+    mCamShift->setVMin(vMin);
+}
+
+void OpenCVWidget::setCamShiftSMin(int sMin) {
+    mCamShift->setSMin(sMin);
+}
+
+int OpenCVWidget::camshiftVMin() const {
+    return mCamShift->vMin();
+}
+
+int OpenCVWidget::camshiftSMin() const{
+   return mCamShift->sMin();
+}

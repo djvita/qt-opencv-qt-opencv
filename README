@@ -1,0 +1,13 @@
+Simple webcam and pattern recognition(faces, eyes…) application intended to learn Qt, OpenCv and Git.
+
+Requisites:
+===========
+Qt SDK -> http://qt.nokia.com/products/
+OpenCV -> http://opencv.willowgarage.com
+
+You need haarcascade files, you have a lot of them on OpenCV's subfolder data/haarcascades
+haarcascade frontal_face_alt2 offers the best performance for face detection.
+
+ToDo:
+=====
+Fix bug tracking faces when rectangle out of bounds.

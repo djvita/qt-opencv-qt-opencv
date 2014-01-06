@@ -1,0 +1,11 @@
+<RCC>
+    <qresource prefix="/">
+        <file>images/icon_detectfaces.png</file>
+        <file>images/icon_quit.png</file>
+        <file>images/icon_screenshot.png</file>
+        <file>images/icon_stopvideo.png</file>
+        <file>images/icon_video.png</file>
+        <file>images/OpenCv.ico</file>
+        <file>images/icon_trackface.png</file>
+    </qresource>
+</RCC>
